@@ -1,26 +1,25 @@
-# app_gpt2.py
+# app_gpt2_fixed.py
 import streamlit as st
 import pandas as pd
 import json
 import random
 import os
-from collections import defaultdict, Counter
-import re
 import torch
 from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+from collections import defaultdict
 
-# -------------------------------------------------
+# ========================================
 # CONFIG
-# -------------------------------------------------
+# ========================================
 st.set_page_config(page_title="Skincare Trend Detector (GPT-2)", layout="wide")
 
 DATASET_PATH = "./dummy_skincare_text.csv"
 OUTPUT_JSON   = "./structured_trends_gpt2.json"
 BATCH_SIZE    = 20
 
-# -------------------------------------------------
-# 1. GENERATE DUMMY DATASET (same as before)
-# -------------------------------------------------
+# ========================================
+# 1. GENERATE DUMMY DATASET
+# ========================================
 @st.cache_data
 def generate_dataset():
     random.seed(42)
@@ -67,13 +66,14 @@ def generate_dataset():
         if random.random() < 0.3:
             txt += random.choice(emojis)
         rows.append({"id": i, "text": txt.strip()})
+    
     df = pd.DataFrame(rows)
     df.to_csv(DATASET_PATH, index=False)
     return df
 
-# -------------------------------------------------
+# ========================================
 # 2. LOAD DATASET
-# -------------------------------------------------
+# ========================================
 if os.path.exists(DATASET_PATH):
     df = pd.read_csv(DATASET_PATH)
     st.success(f"Loaded `{DATASET_PATH}` → {len(df)} rows")
@@ -85,14 +85,13 @@ else:
 with st.expander("View Raw Data (first 10)", expanded=False):
     st.dataframe(df.head(10), use_container_width=True)
 
-# -------------------------------------------------
-# 3. GPT-2 PIPELINE (lightweight)
-# -------------------------------------------------
+# ========================================
+# 3. LOAD GPT-2 MODEL
+# ========================================
 @st.cache_resource
 def load_gpt2():
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    model     = AutoModelForCausalLM.from_pretrained("gpt2")
-    # Use a text-generation pipeline with forced JSON schema
+    model = AutoModelForCausalLM.from_pretrained("gpt2")
     pipe = pipeline(
         "text-generation",
         model=model,
@@ -106,25 +105,25 @@ def load_gpt2():
 
 pipe = load_gpt2()
 
-# -------------------------------------------------
-# 4. PROMPT (same schema, but GPT-2 needs strict instruction)
-# -------------------------------------------------
+# ========================================
+# 4. PROMPT (FIXED: ALL BRACES ESCAPED)
+# ========================================
 PROMPT_TEMPLATE = """
 You are a skincare trend analyst. From the snippets below, return ONLY a JSON array (no markdown, no extra text) with this exact schema:
 
 [
-  {
+  {{
     "trend": "string",
-    "attributes": {
+    "attributes": {{
       "ingredient": "string or null",
       "benefit": "string",
       "product_type": "string or null",
       "target_concern": "string"
-    },
+    }},
     "category": "one of: ingredient-driven, technique/routine, problem-solving innovation, cultural shift, fad",
     "evidence_count": 1,
     "sample_texts": ["quote1", "quote2"]
-  }
+  }}
 ]
 
 Snippets:
@@ -133,9 +132,9 @@ Snippets:
 JSON:
 """
 
-# -------------------------------------------------
-# 5. RUN BUTTON
-# -------------------------------------------------
+# ========================================
+# 5. RUN DETECTION
+# ========================================
 if st.sidebar.button("Run Trend Detection (GPT-2)", type="primary"):
     progress = st.progress(0)
     status   = st.empty()
@@ -147,30 +146,32 @@ if st.sidebar.button("Run Trend Detection (GPT-2)", type="primary"):
     for i in range(0, len(df), BATCH_SIZE):
         batch = df.iloc[i:i+BATCH_SIZE]
         snippets = "\n".join([f"- ID{r['id']}: {r['text']}" for _, r in batch.iterrows()])
-        prompt = PROMPT_TEMPLATE.format(snippets=snippets)
+        prompt = PROMPT_TEMPLATE.format(snippets=snippets)  # No KeyError now
 
-        # GPT-2 generation
         try:
             out = pipe(prompt)[0]["generated_text"].strip()
-            # Clean possible code fences
-            if out.startswith("```"):
-                out = out.split("```", 2)[-1] if "```" in out else out
-            if out.endswith("```"):
-                out = out.rsplit("```", 1)[0]
+            # Clean code fences
+            if "```" in out:
+                start = out.find("```") + 3
+                end = out.rfind("```")
+                out = out[start:end] if end > start else out
             batch_json = json.loads(out)
             all_raw.extend(batch_json if isinstance(batch_json, list) else [])
         except Exception as e:
-            st.warning(f"Batch {i//BATCH_SIZE+1} parsing error: {e}")
+            st.warning(f"Batch {i//BATCH_SIZE+1} failed: {e}")
+        
         progress.progress((i + len(batch)) / len(df))
 
-    # -------------------------------------------------
-    # 6. AGGREGATE
-    # -------------------------------------------------
+    # ========================================
+    # 6. AGGREGATE TRENDS
+    # ========================================
     agg = defaultdict(lambda: {"evidence_count": 0, "sample_texts": []})
     for item in all_raw:
+        if not isinstance(item, dict): continue
         trend = item.get("trend", "").strip()
         cat   = item.get("category", "")
-        key   = (trend.lower(), cat)
+        if not trend or not cat: continue
+        key = (trend.lower(), cat)
 
         entry = agg[key]
         entry["evidence_count"] += item.get("evidence_count", 1)
@@ -198,13 +199,13 @@ if st.sidebar.button("Run Trend Detection (GPT-2)", type="primary"):
     progress.empty()
     status.empty()
 
-    # -------------------------------------------------
+    # ========================================
     # 7. DISPLAY RESULTS
-    # -------------------------------------------------
+    # ========================================
     with container:
-        st.success(f"Done! → `{OUTPUT_JSON}` ({len(final)} trends)")
+        st.success(f"POC Complete! → `{OUTPUT_JSON}` ({len(final)} trends)")
         if final:
-            st.subheader("Top Trends")
+            st.subheader("Top Detected Trends")
             cols = st.columns(3)
             for idx, t in enumerate(final[:6]):
                 with cols[idx % 3]:
@@ -213,7 +214,7 @@ if st.sidebar.button("Run Trend Detection (GPT-2)", type="primary"):
                     st.metric("Evidence", t['evidence_count'])
                     with st.expander("Details"):
                         st.json(t["attributes"])
-                        st.write("**Samples:**")
+                        st.write("**Sample Texts:**")
                         for s in t["sample_texts"]:
                             st.caption(s)
 
@@ -221,21 +222,23 @@ if st.sidebar.button("Run Trend Detection (GPT-2)", type="primary"):
                 st.dataframe(pd.DataFrame(final), use_container_width=True)
 
             st.download_button(
-                "Download JSON",
+                "Download structured_trends_gpt2.json",
                 data=json.dumps(final, indent=2),
                 file_name="structured_trends_gpt2.json",
                 mime="application/json"
             )
         else:
-            st.warning("No trends extracted – try a smaller batch or check prompt.")
+            st.warning("No trends detected. Try rerunning or checking model output.")
 
 else:
     st.info("Click **Run Trend Detection (GPT-2)** in the sidebar.")
     st.markdown("---")
     st.markdown("""
 ### How It Works
-1. **Dataset** – 200 synthetic skincare posts (generated automatically).  
-2. **GPT-2** – Local open-source LLM extracts trends, attributes, category.  
-3. **Output** – `structured_trends_gpt2.json` (same format as Gemini version).  
-4. **No API key** – 100% offline after model download.
+1. **Dataset**: 200 synthetic skincare posts (auto-generated).  
+2. **GPT-2**: Local open-source LLM extracts trends.  
+3. **Output**: `structured_trends_gpt2.json` – same format as Gemini.  
+4. **No API key** – Fully offline after model download.
     """)
+
+st.caption("Built for Skincare Trendspotting POC – No API Key Required")
