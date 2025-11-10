@@ -4,6 +4,7 @@ import pandas as pd
 import json
 import google.generativeai as genai
 from collections import defaultdict
+import random
 import time
 import os
 
@@ -12,42 +13,97 @@ import os
 # ========================================
 st.set_page_config(page_title="Skincare Trend Detector", layout="wide")
 
-GEMINI_API_KEY = "AIzaSyANsbK02NgbT67D16WEmHwq1-f3jZLH4PU"  # Hardcoded
+GEMINI_API_KEY = "AIzaSyANsbK02NgbT67D16WEmHwq1-f3jZLH4PU"  # Hardcoded (revoke after use)
 genai.configure(api_key=GEMINI_API_KEY)
 
 MODEL_NAME = "gemini-1.5-flash"
-DATASET_PATH = "/kaggle/working/dummy_skincare_text.csv"
-OUTPUT_JSON = "/kaggle/working/structured_trends_gemini.json"
+DATASET_PATH = "./dummy_skincare_text.csv"  # Local path (no Kaggle)
+OUTPUT_JSON = "./structured_trends_gemini.json"
 BATCH_SIZE = 20
+
+# ========================================
+# HELPER: GENERATE DUMMY DATASET
+# ========================================
+@st.cache_data
+def generate_dataset():
+    random.seed(42)
+    trend_seeds = [
+        ("ceramides", "ingredient-driven", "ceramides", "serum", "skin barrier"),
+        ("slugging", "technique/routine", None, "occlusive", "dryness"),
+        ("microbiome-friendly", "ingredient-driven", "probiotics", "cleanser", "acne"),
+        ("anti-pollution skincare", "problem-solving innovation", "antioxidants", "mist", "pollution"),
+        ("skinimalism", "cultural shift", None, None, "routine overload"),
+        ("polyglutamic acid", "ingredient-driven", "polyglutamic acid", "serum", "hydration"),
+        ("bakuchiol", "ingredient-driven", "bakuchiol", "serum", "anti-aging"),
+        ("niacinamide", "ingredient-driven", "niacinamide", "serum", "oiliness"),
+        ("skin flooding", "technique/routine", None, "multi-serum", "dehydration"),
+        ("glass skin", "cultural shift", None, "multi-step", "dullness"),
+    ]
+    templates = [
+        "Just tried {trend} and my skin feels amazing!",
+        "Is {trend} worth the hype? Asking for a friend.",
+        "Loving how {trend} fixed my {concern} issue.",
+        "Everyone on TikTok is doing {trend} now.",
+        "Switched to {trend} and never going back.",
+        "Heard {ingredient} in {product} is the new holy grail.",
+        "Finally found a {product} with {ingredient} that works!",
+        "My dermatologist recommended {trend} for {concern}.",
+        "This {trend} routine changed my life.",
+        "Why is no one talking about {trend}?",
+    ]
+    noise_texts = [
+        "Best sunscreen ever!", "This moisturizer smells great.",
+        "Cleansing balm removed all my makeup.", "Retinol burns my skin.",
+        "Need a good eye cream.", "My skin is glowing today!",
+        "Hydrating mask on point.", "Love the packaging of this serum.",
+        "Finally found a non-comedogenic foundation.", "SPF 50 is a must in summer.",
+    ]
+    emoji = ["", " [sparkles]", " [fire]", " [100]", " [heart eyes]"]
+
+    data = []
+    for i in range(1, 201):
+        if random.random() < 0.75:
+            trend, _, ing, prod, conc = random.choice(trend_seeds)
+            text = random.choice(templates).format(
+                trend=trend, ingredient=ing or "", product=prod or "product", concern=conc or "skin"
+            )
+        else:
+            text = random.choice(noise_texts)
+        if random.random() < 0.3:
+            text += random.choice(emoji)
+        data.append({"id": i, "text": text.strip()})
+
+    df = pd.DataFrame(data)
+    df.to_csv(DATASET_PATH, index=False)
+    return df
 
 # ========================================
 # UI
 # ========================================
-st.title("Skincare Trend Detection POC")
+st.title("🧴 Skincare Trend Detection POC")
 st.markdown("**AI-Powered Trend Extraction using Google Gemini**")
-st.sidebar.header("Controls")
 
-# Check dataset
-if not os.path.exists(DATASET_PATH):
-    st.error(f"Dataset not found: `{DATASET_PATH}`")
-    st.info("Upload or generate `dummy_skincare_text.csv` in `/kaggle/working/`")
-    st.stop()
+# Load or generate dataset
+if os.path.exists(DATASET_PATH):
+    df = pd.read_csv(DATASET_PATH)
+    st.success(f"Loaded dataset: `{DATASET_PATH}` → {len(df)} rows")
+else:
+    st.info("Generating dummy dataset...")
+    df = generate_dataset()
+    st.success(f"Generated `{DATASET_PATH}` → {len(df)} rows")
 
-df = pd.read_csv(DATASET_PATH)
-st.success(f"Loaded dataset: `{DATASET_PATH}` → {len(df)} rows")
-
-# Preview data
-with st.expander("View Raw Data (First 10 rows)", expanded=False):
+# Preview
+with st.expander("📊 View Raw Data (First 10 rows)", expanded=False):
     st.dataframe(df.head(10), use_container_width=True)
 
-# Run button
-if st.sidebar.button("Run Trend Detection", type="primary"):
+# Sidebar controls
+st.sidebar.header("Controls")
+if st.sidebar.button("🚀 Run Trend Detection", type="primary"):
     progress_bar = st.progress(0)
     status_text = st.empty()
     results_container = st.container()
 
     status_text.text("Processing batches...")
-    
     all_results = []
     total_batches = (len(df) + BATCH_SIZE - 1) // BATCH_SIZE
 
@@ -91,7 +147,6 @@ Snippets:
     def extract_batch(batch_df, batch_idx):
         snippets = "\n".join([f"- ID{r['id']}: {r['text']}" for _, r in batch_df.iterrows()])
         prompt = GEMINI_PROMPT.format(snippets=snippets)
-
         try:
             model = genai.GenerativeModel(MODEL_NAME)
             response = model.generate_content(
@@ -112,13 +167,12 @@ Snippets:
             st.error(f"Gemini error in batch {batch_idx}: {e}")
             return []
 
-    # Process batches
+    # Process
     for i in range(0, len(df), BATCH_SIZE):
         batch_idx = i // BATCH_SIZE + 1
         batch = df.iloc[i:i+BATCH_SIZE]
         status_text.text(f"Processing batch {batch_idx}/{total_batches}...")
         progress_bar.progress((i + len(batch)) / len(df))
-
         batch_results = extract_batch(batch, batch_idx)
         all_results.extend(batch_results)
         time.sleep(1.5)
@@ -138,13 +192,8 @@ Snippets:
             entry.update({"trend": trend, "attributes": item["attributes"], "category": cat})
 
     final_trends = sorted([
-        {
-            "trend": v["trend"],
-            "attributes": v["attributes"],
-            "category": v["category"],
-            "evidence_count": v["evidence_count"],
-            "sample_texts": v["sample_texts"]
-        }
+        {"trend": v["trend"], "attributes": v["attributes"], "category": v["category"],
+         "evidence_count": v["evidence_count"], "sample_texts": v["sample_texts"]}
         for v in agg.values()
     ], key=lambda x: x["evidence_count"], reverse=True)
 
@@ -155,12 +204,10 @@ Snippets:
     progress_bar.empty()
     status_text.empty()
 
-    # ========================================
-    # DISPLAY RESULTS
-    # ========================================
+    # Results
     with results_container:
-        st.success(f"POC Complete! → `{OUTPUT_JSON}`")
-        st.subheader("Top Detected Trends")
+        st.success(f"POC Complete! → `{OUTPUT_JSON}` ({len(final_trends)} trends detected)")
+        st.subheader("🔍 Top Detected Trends")
 
         cols = st.columns(3)
         for idx, trend in enumerate(final_trends[:6]):
@@ -169,34 +216,35 @@ Snippets:
                 st.caption(f"**Category:** {trend['category']}")
                 st.metric("Evidence Count", trend['evidence_count'])
                 with st.expander("Details"):
-                    st.json(trend["attributes"], expanded=False)
+                    st.json(trend["attributes"])
                     st.write("**Sample Texts:**")
                     for txt in trend["sample_texts"]:
                         st.caption(txt)
 
         # Full table
-        with st.expander("View All Trends (Table)", expanded=False):
+        with st.expander("📋 All Trends (Table)"):
             display_df = pd.DataFrame(final_trends)
-            display_df = display_df[[
-                "trend", "category", "evidence_count",
-                "attributes", "sample_texts"
-            ]]
             st.dataframe(display_df, use_container_width=True)
 
         # Download
         st.download_button(
-            label="Download structured_trends_gemini.json",
+            label="💾 Download JSON Results",
             data=json.dumps(final_trends, indent=2),
             file_name="structured_trends_gemini.json",
             mime="application/json"
         )
 
 else:
-    st.info("Click **Run Trend Detection** in the sidebar to start.")
+    st.info("👆 Click **Run Trend Detection** in the sidebar to start.")
     st.markdown("---")
-    st.markdown("### How to Use")
     st.markdown("""
-    1. Ensure `dummy_skincare_text.csv` is in `/kaggle/working/`  
-    2. Click **Run Trend Detection**  
-    3. View results, download JSON  
+### 📝 How It Works
+1. **Dataset**: 200 synthetic skincare posts/reviews (generated if missing).  
+2. **Gemini Analysis**: Batches texts → Extracts trends, attributes, categories.  
+3. **Output**: Structured JSON with prioritized trends (e.g., ceramides as "ingredient-driven").  
+4. **POC Fit**: Demonstrates trend detection for skincare brand MVP.
     """)
+
+# Footer
+st.markdown("---")
+st.caption("*Built for Skincare Trendspotting POC. Revoke API key after use.*")
