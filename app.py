@@ -9,15 +9,15 @@ import time
 import os
 
 # ========================================
-# CONFIG
+# CONFIG (2025 UPDATE)
 # ========================================
 st.set_page_config(page_title="Skincare Trend Detector", layout="wide")
 
 GEMINI_API_KEY = "AIzaSyANsbK02NgbT67D16WEmHwq1-f3jZLH4PU"  # Hardcoded (revoke after use)
 genai.configure(api_key=GEMINI_API_KEY)
 
-MODEL_NAME = "gemini-1.5-flash"
-DATASET_PATH = "./dummy_skincare_text.csv"  # Local path (no Kaggle)
+MODEL_NAME = "gemini-2.0-flash"  # Updated: 1.5 retired; 2.0 is stable/fast equivalent
+DATASET_PATH = "./dummy_skincare_text.csv"
 OUTPUT_JSON = "./structured_trends_gemini.json"
 BATCH_SIZE = 20
 
@@ -81,7 +81,7 @@ def generate_dataset():
 # UI
 # ========================================
 st.title("🧴 Skincare Trend Detection POC")
-st.markdown("**AI-Powered Trend Extraction using Google Gemini**")
+st.markdown("**AI-Powered Trend Extraction using Google Gemini 2.0**")
 
 # Load or generate dataset
 if os.path.exists(DATASET_PATH):
@@ -107,7 +107,7 @@ if st.sidebar.button("🚀 Run Trend Detection", type="primary"):
     all_results = []
     total_batches = (len(df) + BATCH_SIZE - 1) // BATCH_SIZE
 
-    # GEMINI PROMPT (escaped braces)
+    # GEMINI PROMPT (refined for 2.0; escaped braces)
     GEMINI_PROMPT = """
 You are a senior skincare trend analyst. Analyze the text snippets and:
 
@@ -124,7 +124,7 @@ You are a senior skincare trend analyst. Analyze the text snippets and:
    - "cultural shift"
    - "fad"
 
-Return **JSON array** with exact schema:
+Return ONLY a JSON array with exact schema (no extra text):
 [
   {{
     "trend": "string",
@@ -162,7 +162,8 @@ Snippets:
                 raw = raw.split("```json", 1)[1]
             if raw.endswith("```"):
                 raw = raw.rsplit("```", 1)[0]
-            return json.loads(raw.strip())
+            parsed = json.loads(raw.strip())
+            return parsed if isinstance(parsed, list) else []
         except Exception as e:
             st.error(f"Gemini error in batch {batch_idx}: {e}")
             return []
@@ -175,26 +176,27 @@ Snippets:
         progress_bar.progress((i + len(batch)) / len(df))
         batch_results = extract_batch(batch, batch_idx)
         all_results.extend(batch_results)
-        time.sleep(1.5)
+        time.sleep(1.5)  # Rate limit
 
     # Aggregate
     status_text.text("Aggregating results...")
     agg = defaultdict(lambda: {"evidence_count": 0, "sample_texts": []})
     for item in all_results:
-        trend = item["trend"].strip()
-        cat = item["category"]
-        key = (trend.lower(), cat)
-        entry = agg[key]
-        entry["evidence_count"] += item.get("evidence_count", 1)
-        entry["sample_texts"].extend(item["sample_texts"])
-        entry["sample_texts"] = entry["sample_texts"][:3]
-        if "trend" not in entry:
-            entry.update({"trend": trend, "attributes": item["attributes"], "category": cat})
+        if isinstance(item, dict):  # Safety check
+            trend = item.get("trend", "").strip()
+            cat = item.get("category", "")
+            key = (trend.lower(), cat)
+            entry = agg[key]
+            entry["evidence_count"] += item.get("evidence_count", 1)
+            entry["sample_texts"].extend(item.get("sample_texts", []))
+            entry["sample_texts"] = entry["sample_texts"][:3]
+            if "trend" not in entry:
+                entry.update({"trend": trend, "attributes": item.get("attributes", {}), "category": cat})
 
     final_trends = sorted([
         {"trend": v["trend"], "attributes": v["attributes"], "category": v["category"],
          "evidence_count": v["evidence_count"], "sample_texts": v["sample_texts"]}
-        for v in agg.values()
+        for v in agg.values() if v["trend"]
     ], key=lambda x: x["evidence_count"], reverse=True)
 
     # Save
@@ -207,32 +209,35 @@ Snippets:
     # Results
     with results_container:
         st.success(f"POC Complete! → `{OUTPUT_JSON}` ({len(final_trends)} trends detected)")
-        st.subheader("🔍 Top Detected Trends")
+        if final_trends:
+            st.subheader("🔍 Top Detected Trends")
 
-        cols = st.columns(3)
-        for idx, trend in enumerate(final_trends[:6]):
-            with cols[idx % 3]:
-                st.markdown(f"### {idx+1}. **{trend['trend']}**")
-                st.caption(f"**Category:** {trend['category']}")
-                st.metric("Evidence Count", trend['evidence_count'])
-                with st.expander("Details"):
-                    st.json(trend["attributes"])
-                    st.write("**Sample Texts:**")
-                    for txt in trend["sample_texts"]:
-                        st.caption(txt)
+            cols = st.columns(3)
+            for idx, trend in enumerate(final_trends[:6]):
+                with cols[idx % 3]:
+                    st.markdown(f"### {idx+1}. **{trend['trend']}**")
+                    st.caption(f"**Category:** {trend['category']}")
+                    st.metric("Evidence Count", trend['evidence_count'])
+                    with st.expander("Details"):
+                        st.json(trend["attributes"])
+                        st.write("**Sample Texts:**")
+                        for txt in trend["sample_texts"]:
+                            st.caption(txt)
 
-        # Full table
-        with st.expander("📋 All Trends (Table)"):
-            display_df = pd.DataFrame(final_trends)
-            st.dataframe(display_df, use_container_width=True)
+            # Full table
+            with st.expander("📋 All Trends (Table)"):
+                display_df = pd.DataFrame(final_trends)
+                st.dataframe(display_df, use_container_width=True)
 
-        # Download
-        st.download_button(
-            label="💾 Download JSON Results",
-            data=json.dumps(final_trends, indent=2),
-            file_name="structured_trends_gemini.json",
-            mime="application/json"
-        )
+            # Download
+            st.download_button(
+                label="💾 Download JSON Results",
+                data=json.dumps(final_trends, indent=2),
+                file_name="structured_trends_gemini.json",
+                mime="application/json"
+            )
+        else:
+            st.warning("No trends detected – check API key or try a smaller batch.")
 
 else:
     st.info("👆 Click **Run Trend Detection** in the sidebar to start.")
@@ -240,11 +245,11 @@ else:
     st.markdown("""
 ### 📝 How It Works
 1. **Dataset**: 200 synthetic skincare posts/reviews (generated if missing).  
-2. **Gemini Analysis**: Batches texts → Extracts trends, attributes, categories.  
+2. **Gemini 2.0 Analysis**: Batches texts → Extracts trends, attributes, categories.  
 3. **Output**: Structured JSON with prioritized trends (e.g., ceramides as "ingredient-driven").  
 4. **POC Fit**: Demonstrates trend detection for skincare brand MVP.
     """)
 
 # Footer
 st.markdown("---")
-st.caption("*Built for Skincare Trendspotting POC. Revoke API key after use.*")
+st.caption("*Updated for Gemini 2.0 (Nov 2025). Revoke API key after use.*")
