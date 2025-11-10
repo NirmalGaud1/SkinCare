@@ -15,10 +15,10 @@ import os
 st.set_page_config(page_title="Skincare Trend Detector", layout="wide")
 
 # NOTE: Replace with secure environment variable usage in production
-GEMINI_API_KEY = "AIzaSyA-9-lTQTWdNM43YdOXMQwGKDy0SrMwo6c"
+GEMINI_API_KEY = "AIzaSyANsbK02NgbT67D16WEmHwq1-f3jZLH4PU"
 genai.configure(api_key=GEMINI_API_KEY)
 
-MODEL_NAME = "gemini-1.5-flash"
+MODEL_NAME = "gemini-2.5-flash"
 DATASET_PATH = "./dummy_skincare_text.csv"
 OUTPUT_JSON = "./structured_trends_gemini.json"
 BATCH_SIZE = 20
@@ -96,7 +96,6 @@ else:
 
 # Preview
 with st.expander("📊 View Raw Data (First 10 rows)", expanded=False):
-    # Streamlit deprecation warning fix
     st.dataframe(df.head(10), width='stretch')
 
 # Sidebar controls
@@ -176,7 +175,7 @@ Snippets:
             if not hasattr(response, 'text') or not response.text:
                 # Detailed failure report
                 finish_reason = response.candidates[0].finish_reason.name if (response.candidates and response.candidates[0]) else 'NO_CANDIDATE'
-                prompt_blocked = response.prompt_feedback.block_reason.name if response.prompt_feedback.block_reason.name != 'SAFETY_REASON_UNSPECIFIED' else 'NO_BLOCK'
+                prompt_blocked = response.prompt_feedback.block_reason.name if response.prompt_feedback and response.prompt_feedback.block_reason.name != 'SAFETY_REASON_UNSPECIFIED' else 'NO_BLOCK'
                 
                 st.warning(f"Batch {batch_idx}: No valid text returned. Finish Reason: **{finish_reason}**. Prompt Blocked: {prompt_blocked}")
                 return []
@@ -252,7 +251,6 @@ Snippets:
             # Full table
             with st.expander("📋 All Trends (Table)"):
                 display_df = pd.DataFrame(final_trends)
-                # Streamlit deprecation warning fix
                 st.dataframe(display_df, width='stretch')
 
             # Download
