@@ -1,4 +1,4 @@
-# app_gpt2_fixed.py
+# app_gpt2_final.py
 import streamlit as st
 import pandas as pd
 import json
@@ -86,7 +86,7 @@ with st.expander("View Raw Data (first 10)", expanded=False):
     st.dataframe(df.head(10), use_container_width=True)
 
 # ========================================
-# 3. LOAD GPT-2 MODEL
+# 3. LOAD GPT-2 MODEL (FIXED: do_sample=False)
 # ========================================
 @st.cache_resource
 def load_gpt2():
@@ -97,8 +97,8 @@ def load_gpt2():
         model=model,
         tokenizer=tokenizer,
         device=0 if torch.cuda.is_available() else -1,
-        max_new_tokens=400,
-        temperature=0.0,
+        max_new_tokens=500,
+        do_sample=False,        # GREEDY DECODING (no randomness)
         return_full_text=False,
     )
     return pipe
@@ -106,10 +106,10 @@ def load_gpt2():
 pipe = load_gpt2()
 
 # ========================================
-# 4. PROMPT (FIXED: ALL BRACES ESCAPED)
+# 4. PROMPT (ALL BRACES ESCAPED)
 # ========================================
 PROMPT_TEMPLATE = """
-You are a skincare trend analyst. From the snippets below, return ONLY a JSON array (no markdown, no extra text) with this exact schema:
+You are a skincare trend analyst. Analyze the snippets and return ONLY a valid JSON array (no markdown, no extra text) with this schema:
 
 [
   {{
@@ -146,15 +146,17 @@ if st.sidebar.button("Run Trend Detection (GPT-2)", type="primary"):
     for i in range(0, len(df), BATCH_SIZE):
         batch = df.iloc[i:i+BATCH_SIZE]
         snippets = "\n".join([f"- ID{r['id']}: {r['text']}" for _, r in batch.iterrows()])
-        prompt = PROMPT_TEMPLATE.format(snippets=snippets)  # No KeyError now
+        prompt = PROMPT_TEMPLATE.format(snippets=snippets)
 
         try:
             out = pipe(prompt)[0]["generated_text"].strip()
-            # Clean code fences
+            # Remove code fences
             if "```" in out:
-                start = out.find("```") + 3
-                end = out.rfind("```")
-                out = out[start:end] if end > start else out
+                parts = out.split("```")
+                out = parts[-1] if len(parts) > 1 else out
+            # Clean whitespace
+            out = out.strip()
+            # Parse JSON
             batch_json = json.loads(out)
             all_raw.extend(batch_json if isinstance(batch_json, list) else [])
         except Exception as e:
@@ -228,7 +230,7 @@ if st.sidebar.button("Run Trend Detection (GPT-2)", type="primary"):
                 mime="application/json"
             )
         else:
-            st.warning("No trends detected. Try rerunning or checking model output.")
+            st.warning("No trends detected. Try rerunning.")
 
 else:
     st.info("Click **Run Trend Detection (GPT-2)** in the sidebar.")
