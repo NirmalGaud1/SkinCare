@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import json
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from collections import defaultdict
 import random
 import time
@@ -13,10 +14,11 @@ import os
 # ========================================
 st.set_page_config(page_title="Skincare Trend Detector", layout="wide")
 
-GEMINI_API_KEY = "AIzaSyANsbK02NgbT67D16WEmHwq1-f3jZLH4PU"  # Hardcoded (revoke after use)
+# NOTE: Replace with secure environment variable usage in production
+GEMINI_API_KEY = "AIzaSyANsbK02NgbT67D16WEmHwq1-f3jZLH4PU"
 genai.configure(api_key=GEMINI_API_KEY)
 
-MODEL_NAME = "gemini-2.5-flash"  # Updated: 1.5 retired; 2.0 is stable/fast equivalent
+MODEL_NAME = "gemini-2.5-flash"
 DATASET_PATH = "./dummy_skincare_text.csv"
 OUTPUT_JSON = "./structured_trends_gemini.json"
 BATCH_SIZE = 20
@@ -113,16 +115,16 @@ You are a senior skincare trend analyst. Analyze the text snippets and:
 
 1. Identify emerging trends (repeated/excited phrases).
 2. For each trend, extract:
-   - ingredient (null if none)
-   - benefit
-   - product_type (null if none)
-   - target_concern
+    - ingredient (null if none)
+    - benefit
+    - product_type (null if none)
+    - target_concern
 3. Classify into one:
-   - "ingredient-driven"
-   - "technique/routine"
-   - "problem-solving innovation"
-   - "cultural shift"
-   - "fad"
+    - "ingredient-driven"
+    - "technique/routine"
+    - "problem-solving innovation"
+    - "cultural shift"
+    - "fad"
 
 Return ONLY a JSON array with exact schema (no extra text):
 [
@@ -147,6 +149,18 @@ Snippets:
     def extract_batch(batch_df, batch_idx):
         snippets = "\n".join([f"- ID{r['id']}: {r['text']}" for _, r in batch_df.iterrows()])
         prompt = GEMINI_PROMPT.format(snippets=snippets)
+        
+        # --- ADDED SAFETY CONFIGURATION TO FIX SAFETY BLOCK ERRORS ---
+        safety_config = [
+            genai.types.SafetySetting(
+                category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                # Allows content related to skin/health topics (e.g., 'acne', 'burns')
+                # to pass unless the probability of real harm is HIGH.
+                threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
+            )
+        ]
+        # -------------------------------------------------------------
+        
         try:
             model = genai.GenerativeModel(MODEL_NAME)
             response = model.generate_content(
@@ -154,7 +168,8 @@ Snippets:
                 generation_config=genai.types.GenerationConfig(
                     response_mime_type="application/json",
                     temperature=0.0,
-                    max_output_tokens=2048
+                    max_output_tokens=2048,
+                    safety_settings=safety_config # <--- PASS THE CONFIG HERE
                 )
             )
             raw = response.text.strip()
@@ -176,13 +191,13 @@ Snippets:
         progress_bar.progress((i + len(batch)) / len(df))
         batch_results = extract_batch(batch, batch_idx)
         all_results.extend(batch_results)
-        time.sleep(1.5)  # Rate limit
+        time.sleep(1.5)
 
     # Aggregate
     status_text.text("Aggregating results...")
     agg = defaultdict(lambda: {"evidence_count": 0, "sample_texts": []})
     for item in all_results:
-        if isinstance(item, dict):  # Safety check
+        if isinstance(item, dict):
             trend = item.get("trend", "").strip()
             cat = item.get("category", "")
             key = (trend.lower(), cat)
