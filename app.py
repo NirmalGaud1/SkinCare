@@ -15,7 +15,7 @@ import os
 st.set_page_config(page_title="Skincare Trend Detector", layout="wide")
 
 # NOTE: Replace with secure environment variable usage in production
-GEMINI_API_KEY = "AIzaSyAe80doAlxHun8RyldnZYkvgA-_q-JL-SA"
+GEMINI_API_KEY = "AIzaSyA-9-lTQTWdNM43YdOXMQwGKDy0SrMwo6c"
 genai.configure(api_key=GEMINI_API_KEY)
 
 MODEL_NAME = "gemini-1.5-flash"
