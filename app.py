@@ -16,7 +16,7 @@ st.set_page_config(page_title="Skincare Trend Detector", layout="wide")
 GEMINI_API_KEY = "AIzaSyANsbK02NgbT67D16WEmHwq1-f3jZLH4PU"  # Hardcoded (revoke after use)
 genai.configure(api_key=GEMINI_API_KEY)
 
-MODEL_NAME = "gemini-1.5-flash"  # Updated: 1.5 retired; 2.0 is stable/fast equivalent
+MODEL_NAME = "gemini-2.5-flash"  # Updated: 1.5 retired; 2.0 is stable/fast equivalent
 DATASET_PATH = "./dummy_skincare_text.csv"
 OUTPUT_JSON = "./structured_trends_gemini.json"
 BATCH_SIZE = 20
