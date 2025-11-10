@@ -96,7 +96,8 @@ else:
 
 # Preview
 with st.expander("📊 View Raw Data (First 10 rows)", expanded=False):
-    st.dataframe(df.head(10), use_container_width=True)
+    # Streamlit deprecation warning fix
+    st.dataframe(df.head(10), width='stretch')
 
 # Sidebar controls
 st.sidebar.header("Controls")
@@ -152,7 +153,8 @@ Snippets:
         
         # --- SAFETY CONFIGURATION TO PREVENT BLOCKING BENIGN HEALTH/SKIN TOPICS ---
         safety_config = [
-            genai.types.SafetySetting(
+            # FIX for AttributeError: Use genai.SafetySetting directly
+            genai.SafetySetting( 
                 category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
                 threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
             )
@@ -170,16 +172,15 @@ Snippets:
                 )
             )
 
-            # --- GUARDRAIL FIX FOR ATTRIBUTE ERROR ---
+            # --- GUARDRAIL FIX FOR ATTRIBUTE ERROR (response.text check) ---
             if not hasattr(response, 'text') or not response.text:
+                # Detailed failure report
                 finish_reason = response.candidates[0].finish_reason.name if (response.candidates and response.candidates[0]) else 'NO_CANDIDATE'
-                
-                # Check for prompt filtering, which still happens before output is generated
                 prompt_blocked = response.prompt_feedback.block_reason.name if response.prompt_feedback.block_reason.name != 'SAFETY_REASON_UNSPECIFIED' else 'NO_BLOCK'
                 
                 st.warning(f"Batch {batch_idx}: No valid text returned. Finish Reason: **{finish_reason}**. Prompt Blocked: {prompt_blocked}")
                 return []
-            # ----------------------------------------
+            # ----------------------------------------------------------------
 
             raw = response.text.strip()
             if raw.startswith("```json"):
@@ -251,7 +252,8 @@ Snippets:
             # Full table
             with st.expander("📋 All Trends (Table)"):
                 display_df = pd.DataFrame(final_trends)
-                st.dataframe(display_df, use_container_width=True)
+                # Streamlit deprecation warning fix
+                st.dataframe(display_df, width='stretch')
 
             # Download
             st.download_button(
