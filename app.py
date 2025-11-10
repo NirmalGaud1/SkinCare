@@ -150,16 +150,13 @@ Snippets:
         snippets = "\n".join([f"- ID{r['id']}: {r['text']}" for _, r in batch_df.iterrows()])
         prompt = GEMINI_PROMPT.format(snippets=snippets)
         
-        # --- ADDED SAFETY CONFIGURATION TO FIX SAFETY BLOCK ERRORS ---
+        # --- SAFETY CONFIGURATION TO PREVENT BLOCKING BENIGN HEALTH/SKIN TOPICS ---
         safety_config = [
             genai.types.SafetySetting(
                 category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                # Allows content related to skin/health topics (e.g., 'acne', 'burns')
-                # to pass unless the probability of real harm is HIGH.
                 threshold=HarmBlockThreshold.BLOCK_ONLY_HIGH
             )
         ]
-        # -------------------------------------------------------------
         
         try:
             model = genai.GenerativeModel(MODEL_NAME)
@@ -169,9 +166,21 @@ Snippets:
                     response_mime_type="application/json",
                     temperature=0.0,
                     max_output_tokens=2048,
-                    safety_settings=safety_config # <--- PASS THE CONFIG HERE
+                    safety_settings=safety_config
                 )
             )
+
+            # --- GUARDRAIL FIX FOR ATTRIBUTE ERROR ---
+            if not hasattr(response, 'text') or not response.text:
+                finish_reason = response.candidates[0].finish_reason.name if (response.candidates and response.candidates[0]) else 'NO_CANDIDATE'
+                
+                # Check for prompt filtering, which still happens before output is generated
+                prompt_blocked = response.prompt_feedback.block_reason.name if response.prompt_feedback.block_reason.name != 'SAFETY_REASON_UNSPECIFIED' else 'NO_BLOCK'
+                
+                st.warning(f"Batch {batch_idx}: No valid text returned. Finish Reason: **{finish_reason}**. Prompt Blocked: {prompt_blocked}")
+                return []
+            # ----------------------------------------
+
             raw = response.text.strip()
             if raw.startswith("```json"):
                 raw = raw.split("```json", 1)[1]
