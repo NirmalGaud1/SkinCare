@@ -1,0 +1,202 @@
+# app.py
+import streamlit as st
+import pandas as pd
+import json
+import google.generativeai as genai
+from collections import defaultdict
+import time
+import os
+
+# ========================================
+# CONFIG
+# ========================================
+st.set_page_config(page_title="Skincare Trend Detector", layout="wide")
+
+GEMINI_API_KEY = "AIzaSyANsbK02NgbT67D16WEmHwq1-f3jZLH4PU"  # Hardcoded
+genai.configure(api_key=GEMINI_API_KEY)
+
+MODEL_NAME = "gemini-1.5-flash"
+DATASET_PATH = "/kaggle/working/dummy_skincare_text.csv"
+OUTPUT_JSON = "/kaggle/working/structured_trends_gemini.json"
+BATCH_SIZE = 20
+
+# ========================================
+# UI
+# ========================================
+st.title("Skincare Trend Detection POC")
+st.markdown("**AI-Powered Trend Extraction using Google Gemini**")
+st.sidebar.header("Controls")
+
+# Check dataset
+if not os.path.exists(DATASET_PATH):
+    st.error(f"Dataset not found: `{DATASET_PATH}`")
+    st.info("Upload or generate `dummy_skincare_text.csv` in `/kaggle/working/`")
+    st.stop()
+
+df = pd.read_csv(DATASET_PATH)
+st.success(f"Loaded dataset: `{DATASET_PATH}` → {len(df)} rows")
+
+# Preview data
+with st.expander("View Raw Data (First 10 rows)", expanded=False):
+    st.dataframe(df.head(10), use_container_width=True)
+
+# Run button
+if st.sidebar.button("Run Trend Detection", type="primary"):
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    results_container = st.container()
+
+    status_text.text("Processing batches...")
+    
+    all_results = []
+    total_batches = (len(df) + BATCH_SIZE - 1) // BATCH_SIZE
+
+    # GEMINI PROMPT (escaped braces)
+    GEMINI_PROMPT = """
+You are a senior skincare trend analyst. Analyze the text snippets and:
+
+1. Identify emerging trends (repeated/excited phrases).
+2. For each trend, extract:
+   - ingredient (null if none)
+   - benefit
+   - product_type (null if none)
+   - target_concern
+3. Classify into one:
+   - "ingredient-driven"
+   - "technique/routine"
+   - "problem-solving innovation"
+   - "cultural shift"
+   - "fad"
+
+Return **JSON array** with exact schema:
+[
+  {{
+    "trend": "string",
+    "attributes": {{
+      "ingredient": "string or null",
+      "benefit": "string",
+      "product_type": "string or null",
+      "target_concern": "string"
+    }},
+    "category": "string",
+    "evidence_count": 1,
+    "sample_texts": ["quote1", "quote2"]
+  }}
+]
+
+Snippets:
+{snippets}
+"""
+
+    def extract_batch(batch_df, batch_idx):
+        snippets = "\n".join([f"- ID{r['id']}: {r['text']}" for _, r in batch_df.iterrows()])
+        prompt = GEMINI_PROMPT.format(snippets=snippets)
+
+        try:
+            model = genai.GenerativeModel(MODEL_NAME)
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    response_mime_type="application/json",
+                    temperature=0.0,
+                    max_output_tokens=2048
+                )
+            )
+            raw = response.text.strip()
+            if raw.startswith("```json"):
+                raw = raw.split("```json", 1)[1]
+            if raw.endswith("```"):
+                raw = raw.rsplit("```", 1)[0]
+            return json.loads(raw.strip())
+        except Exception as e:
+            st.error(f"Gemini error in batch {batch_idx}: {e}")
+            return []
+
+    # Process batches
+    for i in range(0, len(df), BATCH_SIZE):
+        batch_idx = i // BATCH_SIZE + 1
+        batch = df.iloc[i:i+BATCH_SIZE]
+        status_text.text(f"Processing batch {batch_idx}/{total_batches}...")
+        progress_bar.progress((i + len(batch)) / len(df))
+
+        batch_results = extract_batch(batch, batch_idx)
+        all_results.extend(batch_results)
+        time.sleep(1.5)
+
+    # Aggregate
+    status_text.text("Aggregating results...")
+    agg = defaultdict(lambda: {"evidence_count": 0, "sample_texts": []})
+    for item in all_results:
+        trend = item["trend"].strip()
+        cat = item["category"]
+        key = (trend.lower(), cat)
+        entry = agg[key]
+        entry["evidence_count"] += item.get("evidence_count", 1)
+        entry["sample_texts"].extend(item["sample_texts"])
+        entry["sample_texts"] = entry["sample_texts"][:3]
+        if "trend" not in entry:
+            entry.update({"trend": trend, "attributes": item["attributes"], "category": cat})
+
+    final_trends = sorted([
+        {
+            "trend": v["trend"],
+            "attributes": v["attributes"],
+            "category": v["category"],
+            "evidence_count": v["evidence_count"],
+            "sample_texts": v["sample_texts"]
+        }
+        for v in agg.values()
+    ], key=lambda x: x["evidence_count"], reverse=True)
+
+    # Save
+    with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
+        json.dump(final_trends, f, indent=2, ensure_ascii=False)
+
+    progress_bar.empty()
+    status_text.empty()
+
+    # ========================================
+    # DISPLAY RESULTS
+    # ========================================
+    with results_container:
+        st.success(f"POC Complete! → `{OUTPUT_JSON}`")
+        st.subheader("Top Detected Trends")
+
+        cols = st.columns(3)
+        for idx, trend in enumerate(final_trends[:6]):
+            with cols[idx % 3]:
+                st.markdown(f"### {idx+1}. **{trend['trend']}**")
+                st.caption(f"**Category:** {trend['category']}")
+                st.metric("Evidence Count", trend['evidence_count'])
+                with st.expander("Details"):
+                    st.json(trend["attributes"], expanded=False)
+                    st.write("**Sample Texts:**")
+                    for txt in trend["sample_texts"]:
+                        st.caption(txt)
+
+        # Full table
+        with st.expander("View All Trends (Table)", expanded=False):
+            display_df = pd.DataFrame(final_trends)
+            display_df = display_df[[
+                "trend", "category", "evidence_count",
+                "attributes", "sample_texts"
+            ]]
+            st.dataframe(display_df, use_container_width=True)
+
+        # Download
+        st.download_button(
+            label="Download structured_trends_gemini.json",
+            data=json.dumps(final_trends, indent=2),
+            file_name="structured_trends_gemini.json",
+            mime="application/json"
+        )
+
+else:
+    st.info("Click **Run Trend Detection** in the sidebar to start.")
+    st.markdown("---")
+    st.markdown("### How to Use")
+    st.markdown("""
+    1. Ensure `dummy_skincare_text.csv` is in `/kaggle/working/`  
+    2. Click **Run Trend Detection**  
+    3. View results, download JSON  
+    """)
